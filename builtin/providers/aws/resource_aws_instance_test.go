@@ -456,6 +456,26 @@ func TestAccAWSInstance_associatePublicIPAndPrivateIP(t *testing.T) {
 	})
 }
 
+func TestAccAWSInstance_rootBlockDeviceMismatch(t *testing.T) {
+	var v ec2.Instance
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckInstanceDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccInstanceConfigRootBlockDeviceMismatch,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckInstanceExists("aws_instance.foo", &v),
+					resource.TestCheckResourceAttr(
+						"aws_instance.foo", "root_block_device.0.volume_size", "13"),
+				),
+			},
+		},
+	})
+}
+
 func testAccCheckInstanceDestroy(s *terraform.State) error {
 	return testAccCheckInstanceDestroyWithProvider(s, testAccProvider)
 }
@@ -887,5 +907,26 @@ resource "aws_eip" "foo_eip" {
   instance = "${aws_instance.foo_instance.id}"
   vpc = true
 	depends_on = ["aws_internet_gateway.gw"]
+}
+`
+
+const testAccInstanceConfigRootBlockDeviceMismatch = `
+resource "aws_vpc" "foo" {
+	cidr_block = "10.1.0.0/16"
+}
+
+resource "aws_subnet" "foo" {
+	cidr_block = "10.1.1.0/24"
+	vpc_id = "${aws_vpc.foo.id}"
+}
+
+resource "aws_instance" "foo" {
+	// This is an AMI with RootDeviceName: "/dev/sda1"; actual root: "/dev/sda"
+	ami = "ami-ef5b69df"
+	instance_type = "t1.micro"
+	subnet_id = "${aws_subnet.foo.id}"
+	root_block_device {
+		volume_size = 13
+	}
 }
 `
