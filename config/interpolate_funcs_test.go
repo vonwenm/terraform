@@ -123,7 +123,7 @@ func TestInterpolateFuncFormatList(t *testing.T) {
 			// formatlist applies to each list element in turn
 			{
 				`${formatlist("<%s>", split(",", "A,B"))}`,
-				"<A>" + InterpSplitDelim + "<B>",
+				"<A>" + StringListDelim + "<B>",
 				false,
 			},
 			// formatlist repeats scalar elements
@@ -187,8 +187,8 @@ func TestInterpolateFuncJoin(t *testing.T) {
 				fmt.Sprintf(`${join(".", "%s")}`,
 					fmt.Sprintf(
 						"foo%sbar%sbaz",
-						InterpSplitDelim,
-						InterpSplitDelim)),
+						StringListDelim,
+						StringListDelim)),
 				"foo.bar.baz",
 				false,
 			},
@@ -315,9 +315,9 @@ func TestInterpolateFuncSplit(t *testing.T) {
 				`${split(",", ",,,")}`,
 				fmt.Sprintf(
 					"%s%s%s",
-					InterpSplitDelim,
-					InterpSplitDelim,
-					InterpSplitDelim),
+					StringListDelim,
+					StringListDelim,
+					StringListDelim),
 				false,
 			},
 
@@ -326,7 +326,7 @@ func TestInterpolateFuncSplit(t *testing.T) {
 				fmt.Sprintf(
 					"%s%s",
 					"foo",
-					InterpSplitDelim),
+					StringListDelim),
 				false,
 			},
 
@@ -334,9 +334,9 @@ func TestInterpolateFuncSplit(t *testing.T) {
 				`${split(",", ",foo,")}`,
 				fmt.Sprintf(
 					"%s%s%s",
-					InterpSplitDelim,
+					StringListDelim,
 					"foo",
-					InterpSplitDelim),
+					StringListDelim),
 				false,
 			},
 
@@ -344,8 +344,8 @@ func TestInterpolateFuncSplit(t *testing.T) {
 				`${split(".", "foo.bar.baz")}`,
 				fmt.Sprintf(
 					"foo%sbar%sbaz",
-					InterpSplitDelim,
-					InterpSplitDelim),
+					StringListDelim,
+					StringListDelim),
 				false,
 			},
 		},
@@ -405,7 +405,7 @@ func TestInterpolateFuncKeys(t *testing.T) {
 				`${keys("foo")}`,
 				fmt.Sprintf(
 					"bar%squx",
-					InterpSplitDelim),
+					StringListDelim),
 				false,
 			},
 
@@ -454,7 +454,7 @@ func TestInterpolateFuncValues(t *testing.T) {
 				`${values("foo")}`,
 				fmt.Sprintf(
 					"quack%sbaz",
-					InterpSplitDelim),
+					StringListDelim),
 				false,
 			},
 
@@ -487,7 +487,7 @@ func TestInterpolateFuncElement(t *testing.T) {
 		Cases: []testFunctionCase{
 			{
 				fmt.Sprintf(`${element("%s", "1")}`,
-					"foo"+InterpSplitDelim+"baz"),
+					"foo"+StringListDelim+"baz"),
 				"baz",
 				false,
 			},
@@ -501,7 +501,7 @@ func TestInterpolateFuncElement(t *testing.T) {
 			// Invalid index should wrap vs. out-of-bounds
 			{
 				fmt.Sprintf(`${element("%s", "2")}`,
-					"foo"+InterpSplitDelim+"baz"),
+					"foo"+StringListDelim+"baz"),
 				"foo",
 				false,
 			},
@@ -509,7 +509,7 @@ func TestInterpolateFuncElement(t *testing.T) {
 			// Too many args
 			{
 				fmt.Sprintf(`${element("%s", "0", "2")}`,
-					"foo"+InterpSplitDelim+"baz"),
+					"foo"+StringListDelim+"baz"),
 				nil,
 				true,
 			},

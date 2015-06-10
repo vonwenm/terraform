@@ -445,7 +445,7 @@ func (i *Interpolater) computeResourceMultiVariable(
 			v.FullKey())
 	}
 
-	return strings.Join(values, config.InterpSplitDelim), nil
+	return config.NewStringList(values).String(), nil
 }
 
 func (i *Interpolater) resourceVariableInfo(
