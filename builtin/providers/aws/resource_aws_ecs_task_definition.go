@@ -138,12 +138,14 @@ func resourceAwsEcsTaskDefinitionUpdate(d *schema.ResourceData, meta interface{}
 func resourceAwsEcsTaskDefinitionDelete(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ecsconn
 
-	// NOT YET IMPLEMENTED o_O
 	_, err := conn.DeregisterTaskDefinition(&ecs.DeregisterTaskDefinitionInput{
-		TaskDefinition: aws.String(d.Id()),
+		TaskDefinition: aws.String(d.Get("arn").(string)),
 	})
+	if err != nil {
+		return err
+	}
 
-	log.Printf("[DEBUG] Deregistering task definition %s returned %#v", d.Id(), err)
+	log.Printf("[DEBUG] Task definition %s deregistered.", d.Id())
 
 	return nil
 }
