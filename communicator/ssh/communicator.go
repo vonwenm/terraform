@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/terraform/communicator/remote"
 	"github.com/hashicorp/terraform/terraform"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 const (
@@ -50,6 +51,8 @@ type sshConfig struct {
 	// sshAgentConn is a pointer to the UNIX connection for talking with the
 	// ssh-agent.
 	sshAgentConn net.Conn
+
+	sshAgent agent.Agent
 }
 
 // New creates a new communicator implementation over SSH.
@@ -121,6 +124,26 @@ func (c *Communicator) Connect(o terraform.UIOutput) (err error) {
 	}
 
 	c.client = ssh.NewClient(sshConn, sshChan, req)
+
+	if c.config.sshAgent != nil {
+		log.Printf("[DEBUG] Telling SSH config to foward to agent")
+		if err := agent.ForwardToAgent(c.client, c.config.sshAgent); err != nil {
+			return err
+		}
+
+		log.Printf("[DEBUG] Setting up a session to request agent forwarding")
+		session, err := c.newSession()
+		if err != nil {
+			return err
+		}
+		defer session.Close()
+
+		if err = agent.RequestAgentForwarding(session); err != nil {
+			return err
+		}
+
+		log.Printf("[INFO] agent forwarding enabled")
+	}
 
 	if o != nil {
 		o.Output("Connected!")
@@ -562,4 +585,46 @@ func ConnectFunc(network, addr string) func() (net.Conn, error) {
 
 		return c, nil
 	}
+}
+
+// BastionConnectFunc is a convenience method for returning a function
+// that connects to a host over a bastion connection.
+func BastionConnectFunc(
+	bProto string,
+	bAddr string,
+	bConf *ssh.ClientConfig,
+	proto string,
+	addr string) func() (net.Conn, error) {
+	return func() (net.Conn, error) {
+		log.Printf("[DEBUG] Connecting to bastion: %s", bAddr)
+		// Connect to the bastion
+		bastion, err := ssh.Dial(bProto, bAddr, bConf)
+		if err != nil {
+			return nil, fmt.Errorf("Error connecting to bastion: %s", err)
+		}
+
+		log.Printf("[DEBUG] Connecting via bastion to host: %s", addr)
+		// Connect through to the end host
+		conn, err := bastion.Dial(proto, addr)
+		if err != nil {
+			bastion.Close()
+			return nil, err
+		}
+
+		// Wrap it up so we close both things properly
+		return &bastionConn{
+			Conn:    conn,
+			Bastion: bastion,
+		}, nil
+	}
+}
+
+type bastionConn struct {
+	net.Conn
+	Bastion *ssh.Client
+}
+
+func (c *bastionConn) Close() error {
+	c.Conn.Close()
+	return c.Bastion.Close()
 }

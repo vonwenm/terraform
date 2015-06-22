@@ -44,6 +44,12 @@ type connectionInfo struct {
 	Timeout    string
 	ScriptPath string        `mapstructure:"script_path"`
 	TimeoutVal time.Duration `mapstructure:"-"`
+
+	BastionUser     string `mapstructure:"bastion_user"`
+	BastionPassword string `mapstructure:"bastion_password"`
+	BastionKeyFile  string `mapstructure:"bastion_key_file"`
+	BastionHost     string `mapstructure:"bastion_host"`
+	BastionPort     int    `mapstructure:"bastion_port"`
 }
 
 // parseConnectionInfo is used to convert the ConnInfo of the InstanceState into
@@ -77,6 +83,22 @@ func parseConnectionInfo(s *terraform.InstanceState) (*connectionInfo, error) {
 		connInfo.TimeoutVal = DefaultTimeout
 	}
 
+	// Default all bastion config attrs to their non-bastion counterparts
+	if connInfo.BastionHost != "" {
+		if connInfo.BastionUser == "" {
+			connInfo.BastionUser = connInfo.User
+		}
+		if connInfo.BastionPassword == "" {
+			connInfo.BastionPassword = connInfo.Password
+		}
+		if connInfo.BastionKeyFile == "" {
+			connInfo.BastionKeyFile = connInfo.KeyFile
+		}
+		if connInfo.BastionPort == 0 {
+			connInfo.BastionPort = connInfo.Port
+		}
+	}
+
 	return connInfo, nil
 }
 
@@ -95,9 +117,16 @@ func safeDuration(dur string, defaultDur time.Duration) time.Duration {
 func prepareSSHConfig(connInfo *connectionInfo) (*sshConfig, error) {
 	var conn net.Conn
 	var err error
+	var sshAgent agent.Agent
 
 	sshConf := &ssh.ClientConfig{
 		User: connInfo.User,
+	}
+	var bastionConf *ssh.ClientConfig
+	if connInfo.BastionHost != "" {
+		bastionConf = &ssh.ClientConfig{
+			User: connInfo.User,
+		}
 	}
 	if connInfo.Agent {
 		sshAuthSock := os.Getenv("SSH_AUTH_SOCK")
@@ -112,54 +141,90 @@ func prepareSSHConfig(connInfo *connectionInfo) (*sshConfig, error) {
 		}
 		// I need to close this but, later after all connections have been made
 		// defer conn.Close()
-		signers, err := agent.NewClient(conn).Signers()
-		if err != nil {
-			return nil, fmt.Errorf("Error getting keys from ssh agent: %v", err)
+		sshAgent = agent.NewClient(conn)
+		agentAuth := ssh.PublicKeysCallback(sshAgent.Signers)
+		sshConf.Auth = append(sshConf.Auth, agentAuth)
+		if bastionConf != nil {
+			bastionConf.Auth = append(bastionConf.Auth, agentAuth)
 		}
-
-		sshConf.Auth = append(sshConf.Auth, ssh.PublicKeys(signers...))
 	}
 	if connInfo.KeyFile != "" {
-		fullPath, err := homedir.Expand(connInfo.KeyFile)
+		signer, err := readPublicKeyFromPath(connInfo.KeyFile)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to expand home directory: %v", err)
+			return nil, err
 		}
-		key, err := ioutil.ReadFile(fullPath)
-		if err != nil {
-			return nil, fmt.Errorf("Failed to read key file '%s': %v", connInfo.KeyFile, err)
-		}
-
-		// We parse the private key on our own first so that we can
-		// show a nicer error if the private key has a password.
-		block, _ := pem.Decode(key)
-		if block == nil {
-			return nil, fmt.Errorf(
-				"Failed to read key '%s': no key found", connInfo.KeyFile)
-		}
-		if block.Headers["Proc-Type"] == "4,ENCRYPTED" {
-			return nil, fmt.Errorf(
-				"Failed to read key '%s': password protected keys are\n"+
-					"not supported. Please decrypt the key prior to use.", connInfo.KeyFile)
-		}
-
-		signer, err := ssh.ParsePrivateKey(key)
-		if err != nil {
-			return nil, fmt.Errorf("Failed to parse key file '%s': %v", connInfo.KeyFile, err)
-		}
-
 		sshConf.Auth = append(sshConf.Auth, ssh.PublicKeys(signer))
 	}
-	if connInfo.Password != "" {
-		sshConf.Auth = append(sshConf.Auth,
-			ssh.Password(connInfo.Password))
-		sshConf.Auth = append(sshConf.Auth,
-			ssh.KeyboardInteractive(PasswordKeyboardInteractive(connInfo.Password)))
+	if bastionConf != nil && connInfo.BastionKeyFile != "" {
+		signer, err := readPublicKeyFromPath(connInfo.BastionKeyFile)
+		if err != nil {
+			return nil, err
+		}
+		bastionConf.Auth = append(bastionConf.Auth, ssh.PublicKeys(signer))
+	}
+	sshConf.Auth = append(sshConf.Auth,
+		authMethodsFromPassword(connInfo.Password)...)
+	if bastionConf != nil {
+		bastionConf.Auth = append(bastionConf.Auth,
+			authMethodsFromPassword(connInfo.BastionPassword)...)
 	}
 	host := fmt.Sprintf("%s:%d", connInfo.Host, connInfo.Port)
+
+	connectFunc := ConnectFunc("tcp", host)
+
+	if bastionConf != nil {
+		bastionHost := fmt.Sprintf("%s:%d", connInfo.BastionHost, connInfo.BastionPort)
+		connectFunc = BastionConnectFunc(
+			"tcp", bastionHost, bastionConf, "tcp", host)
+	}
+
 	config := &sshConfig{
 		config:       sshConf,
-		connection:   ConnectFunc("tcp", host),
+		connection:   connectFunc,
 		sshAgentConn: conn,
+		sshAgent:     sshAgent,
 	}
 	return config, nil
+}
+
+func readPublicKeyFromPath(path string) (ssh.Signer, error) {
+	fullPath, err := homedir.Expand(path)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to expand home directory: %v", err)
+	}
+	key, err := ioutil.ReadFile(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to read key file '%s': %v", path, err)
+	}
+
+	// We parse the private key on our own first so that we can
+	// show a nicer error if the private key has a password.
+	block, _ := pem.Decode(key)
+	if block == nil {
+		return nil, fmt.Errorf(
+			"Failed to read key '%s': no key found", path)
+	}
+	if block.Headers["Proc-Type"] == "4,ENCRYPTED" {
+		return nil, fmt.Errorf(
+			"Failed to read key '%s': password protected keys are\n"+
+				"not supported. Please decrypt the key prior to use.", path)
+	}
+
+	signer, err := ssh.ParsePrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to parse key file '%s': %v", path, err)
+	}
+
+	return signer, nil
+}
+
+func authMethodsFromPassword(pw string) []ssh.AuthMethod {
+	var methods []ssh.AuthMethod
+	if pw != "" {
+		methods = append(methods, ssh.Password(pw))
+		methods = append(methods,
+			ssh.KeyboardInteractive(PasswordKeyboardInteractive(pw)))
+	}
+
+	return methods
 }
